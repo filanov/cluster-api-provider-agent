@@ -22,6 +22,15 @@ import (
 	"sigs.k8s.io/cluster-api/errors"
 )
 
+type AgentReference struct {
+        // Name is unique within a namespace to reference an agent resource.
+        // +optional
+        Name string `json:"name,omitempty"`
+        // Namespace defines the space within which the agent name must be unique.
+        // +optional
+        Namespace string `json:"namespace,omitempty"`
+}
+
 // AgentMachineSpec defines the desired state of AgentMachine
 type AgentMachineSpec struct {
 	// The minimum number of CPU cores that this Machine requires
@@ -46,6 +55,9 @@ type AgentMachineStatus struct {
 	// Ready is true when the provider resource is ready.
 	// +optional
 	Ready bool `json:"ready"`
+
+	// The Agent matched to the Machine
+	AgentRef *AgentReference `json:"agentRef,omitempty"`
 
 	// Addresses contains the Agent's associated addresses.
 	Addresses []clusterv1alpha4.MachineAddress `json:"addresses,omitempty"`

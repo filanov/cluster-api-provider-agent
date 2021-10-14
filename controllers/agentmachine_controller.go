@@ -18,41 +18,85 @@ package controllers
 
 import (
 	"context"
+	"time"
 
+	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
+	logutil "github.com/openshift/assisted-service/pkg/log"
+	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	capiproviderv1alpha1 "github.com/eranco74/cluster-api-provider-agent/api/v1alpha1"
 )
+
+const defaultRequeueAfterOnError = 10 * time.Second
 
 // AgentMachineReconciler reconciles a AgentMachine object
 type AgentMachineReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	Log    logrus.FieldLogger
 }
 
 //+kubebuilder:rbac:groups=capi-provider.agent-install.openshift.io,resources=agentmachines,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=capi-provider.agent-install.openshift.io,resources=agentmachines/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=capi-provider.agent-install.openshift.io,resources=agentmachines/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the AgentMachine object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.9.2/pkg/reconcile
-func (r *AgentMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+func (r *AgentMachineReconciler) Reconcile(originalCtx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx := addRequestIdIfNeeded(originalCtx)
+	log := logutil.FromContext(ctx, r.Log).WithFields(
+		logrus.Fields{
+			"agent_machine":           req.Name,
+			"agent_machine_namespace": req.Namespace,
+		})
 
-	// your logic here
+	defer func() {
+		log.Info("InfraEnv Reconcile ended")
+	}()
+
+	agentMachine := &capiproviderv1alpha1.AgentMachine{}
+	if err := r.Get(ctx, req.NamespacedName, agentMachine); err != nil {
+		log.WithError(err).Errorf("Failed to get agentMachine %s", req.NamespacedName)
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// If the AgentMachine is ready, we have nothing to do
+	if agentMachine.Status.Ready == true {
+		return ctrl.Result{}, nil
+	}
+	// If I don't have an agent, find one and set 'agentRef'
+	if agentMachine.Status.AgentRef == nil {
+		return findAgent(ctx, log, agentMachine)
+	}
+
+	// If I have an agent, update its IP addresses if necessary
+
+	// If I have an agent, check its conditions and update 'ready'
+
+	// If I have an agent in error, update 'failureReason' and 'failureMessage'
 
 	return ctrl.Result{}, nil
 }
+
+func (r *AgentMachineReconciler) findAgent(ctx context.Context, log logrus.FieldLogger, agentMachine *capiproviderv1alpha1.AgentMachine) (ctrl.Result, error) {
+	errReply := ctrl.Result{RequeueAfter: defaultRequeueAfterOnError}
+	agents := &aiv1beta1.AgentList{}
+	if err := r.List(ctx, agents); err != nil {
+		return errReply, err
+	}
+	for i, agent := range agents.Items {
+		// Take the first free agent that we find for now
+		if agent.Spec.ClusterDeploymentName == nil {
+			agentMachine.Status.AgentRef.Name = agent.Name
+			agentMachine.Status.AgentRef.Namespace = agent.Namespace
+			agentMachine.Spec.ProviderID = "agent://" + agent.Status.Inventory.SystemVendor.SerialNumber
+		}
+	}
+	return ctrl.Result{}, nil
+}
+
+func getClusterDeploymentFromAgent(agent)
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *AgentMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
